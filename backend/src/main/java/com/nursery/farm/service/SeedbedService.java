@@ -2,9 +2,10 @@ package com.nursery.farm.service;
 
 import com.nursery.farm.dto.BizException;
 import com.nursery.farm.entity.Seedbed;
+import com.nursery.farm.repository.BedOccupancyRepository;
 import com.nursery.farm.repository.GreenhouseRepository;
-import com.nursery.farm.repository.NurseryBatchRepository;
 import com.nursery.farm.repository.SeedbedRepository;
+import java.time.LocalDate;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,15 +13,18 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class SeedbedService {
 
+    /** 已经出圃/报废的批次不再占床 */
+    private static final List<String> SETTLED = List.of("已出圃", "已报废");
+
     private final SeedbedRepository seedbeds;
     private final GreenhouseRepository greenhouses;
-    private final NurseryBatchRepository batches;
+    private final BedOccupancyRepository occupancies;
 
     public SeedbedService(SeedbedRepository seedbeds, GreenhouseRepository greenhouses,
-                          NurseryBatchRepository batches) {
+                          BedOccupancyRepository occupancies) {
         this.seedbeds = seedbeds;
         this.greenhouses = greenhouses;
-        this.batches = batches;
+        this.occupancies = occupancies;
     }
 
     public List<Seedbed> list(Long greenhouseId, String status, String keyword) {
@@ -30,6 +34,11 @@ public class SeedbedService {
                 .filter(s -> keyword == null || keyword.isEmpty()
                         || s.name.contains(keyword) || s.code.contains(keyword))
                 .toList();
+    }
+
+    /** 这张床今天是否还被没出圃的苗占着（看床位账，不看批次现在的床指向）。 */
+    private boolean stillHolding(Long seedbedId) {
+        return occupancies.countHoldingOn(seedbedId, LocalDate.now(), SETTLED) > 0;
     }
 
     @Transactional
@@ -66,14 +75,13 @@ public class SeedbedService {
         }
         // 实体上 capacity 有默认值 0，这里必须按「>0 才算真的要改」判，否则只改状态也会被当成改容量
         if (input.capacity != null && input.capacity > 0 && !input.capacity.equals(bed.capacity)) {
-            if (batches.countBySeedbedIdAndStatusNotIn(bed.id, List.of("已出圃", "已报废")) > 0) {
+            if (stillHolding(bed.id)) {
                 throw new BizException("这张苗床上还有没出圃的批次，不能改可放株数");
             }
             bed.capacity = input.capacity;
         }
         if (input.status != null && !input.status.isBlank() && !input.status.equals(bed.status)) {
-            if (!"在用".equals(input.status)
-                    && batches.countBySeedbedIdAndStatusNotIn(bed.id, List.of("已出圃", "已报废")) > 0) {
+            if (!"在用".equals(input.status) && stillHolding(bed.id)) {
                 throw new BizException("苗床 " + bed.name + " 上还有没出圃的批次，先出圃或报废再改成"
                         + input.status);
             }

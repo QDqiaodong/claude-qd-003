@@ -63,10 +63,16 @@
             <el-tag :type="tagType(row.status)">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="210">
+        <el-table-column label="操作" width="280">
           <template #default="{ row }">
             <el-button v-if="row.status === '育苗中'" link type="primary" @click="openReady(row)">转待出圃</el-button>
             <el-button v-if="row.status === '待出圃'" link type="success" @click="advance(row, 'out')">出圃</el-button>
+            <el-button
+              v-if="row.status === '育苗中' || row.status === '待出圃'"
+              link
+              type="warning"
+              @click="goTransfer(row)"
+            >转棚</el-button>
             <el-button
               v-if="row.status !== '已出圃' && row.status !== '已报废'"
               link
@@ -149,8 +155,11 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { batchApi, seedbedApi, varietyApi } from '../api'
+
+const router = useRouter()
 
 const statuses = ['育苗中', '待出圃', '已出圃', '已报废']
 
@@ -277,6 +286,10 @@ const scrap = async (row) => {
     return
   }
   advance(row, 'scrap')
+}
+
+const goTransfer = (row) => {
+  router.push({ path: '/transfers', query: { batchId: row.id } })
 }
 
 onMounted(async () => {

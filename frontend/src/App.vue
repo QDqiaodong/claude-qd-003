@@ -6,6 +6,7 @@
         <el-menu-item index="/greenhouses">温室与苗床</el-menu-item>
         <el-menu-item index="/batches">品种与育苗批次</el-menu-item>
         <el-menu-item index="/beds">苗床占用</el-menu-item>
+        <el-menu-item index="/transfers">转棚调拨</el-menu-item>
         <el-menu-item index="/shipments">出圃发货</el-menu-item>
       </el-menu>
     </el-header>

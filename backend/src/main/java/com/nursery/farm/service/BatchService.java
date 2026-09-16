@@ -1,10 +1,12 @@
 package com.nursery.farm.service;
 
 import com.nursery.farm.dto.BizException;
+import com.nursery.farm.entity.BedOccupancy;
 import com.nursery.farm.entity.Greenhouse;
 import com.nursery.farm.entity.NurseryBatch;
 import com.nursery.farm.entity.Seedbed;
 import com.nursery.farm.entity.Variety;
+import com.nursery.farm.repository.BedOccupancyRepository;
 import com.nursery.farm.repository.GreenhouseRepository;
 import com.nursery.farm.repository.NurseryBatchRepository;
 import com.nursery.farm.repository.SeedbedRepository;
@@ -18,20 +20,23 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class BatchService {
 
-    /** 还占着苗床的状态 */
-    private static final List<String> HOLDING = List.of("育苗中", "待出圃");
+    /** 已经了结、不再占床的状态 */
+    private static final List<String> SETTLED = List.of("已出圃", "已报废");
 
     private final NurseryBatchRepository batches;
     private final VarietyRepository varieties;
     private final SeedbedRepository seedbeds;
     private final GreenhouseRepository greenhouses;
+    private final BedOccupancyRepository occupancies;
 
     public BatchService(NurseryBatchRepository batches, VarietyRepository varieties,
-                        SeedbedRepository seedbeds, GreenhouseRepository greenhouses) {
+                        SeedbedRepository seedbeds, GreenhouseRepository greenhouses,
+                        BedOccupancyRepository occupancies) {
         this.batches = batches;
         this.varieties = varieties;
         this.seedbeds = seedbeds;
         this.greenhouses = greenhouses;
+        this.occupancies = occupancies;
     }
 
     public List<NurseryBatch> list(String status, Long seedbedId, Long varietyId, String keyword) {
@@ -96,19 +101,23 @@ public class BatchService {
         }
 
         LocalDate from = input.sowDate;
-        LocalDate to = input.expectOutDate == null ? input.sowDate : input.expectOutDate;
-        for (NurseryBatch other : batches.findBySeedbedIdAndStatusNotIn(bed.id, List.of("已出圃", "已报废"))) {
-            if (other.sowDate == null) {
+        LocalDate to = input.expectOutDate;
+        // 先锁床行（和转棚调拨同一把锁、同一个顺序），再读占用段做撞期校验，并发也不会撞
+        seedbeds.lockByIds(List.of(bed.id));
+        for (BedOccupancy seg : occupancies.findBySeedbedIdOrderByFromDateAsc(bed.id)) {
+            NurseryBatch other = batches.findById(seg.batchId).orElse(null);
+            if (other != null && SETTLED.contains(other.status)) {
                 continue;
             }
-            LocalDate oFrom = other.sowDate;
-            LocalDate oTo = other.expectOutDate == null ? other.sowDate : other.expectOutDate;
-            if (from.isBefore(oTo) && oFrom.isBefore(to)) {
+            if (TransferService.overlap(from, to, seg.fromDate, seg.toDate)) {
+                String otherNo = other == null ? ("#" + seg.batchId) : other.batchNo;
                 throw new BizException("苗床 " + bed.name + " 在这个时间段已经被批次 "
-                        + other.batchNo + " 占着（" + oFrom + " 到 " + oTo + "）");
+                        + otherNo + " 占着（" + seg.fromDate + " 到 "
+                        + (seg.toDate == null ? "未定" : seg.toDate.minusDays(1)) + "）");
             }
         }
 
+        LocalDateTime now = LocalDateTime.now();
         NurseryBatch saved = new NurseryBatch();
         saved.batchNo = nextBatchNo();
         saved.varietyId = variety.id;
@@ -119,9 +128,21 @@ public class BatchService {
         saved.actualQty = 0;
         saved.grower = input.grower;
         saved.status = "育苗中";
-        saved.createdAt = LocalDateTime.now();
-        saved.updatedAt = saved.createdAt;
-        return batches.save(saved);
+        saved.createdAt = now;
+        saved.updatedAt = now;
+        saved = batches.save(saved);
+
+        // 床位账：开一批就开一段开放占用（有预计出圃就写到那天，没有就先开放）
+        BedOccupancy occ = new BedOccupancy();
+        occ.batchId = saved.id;
+        occ.seedbedId = bed.id;
+        occ.fromDate = from;
+        occ.toDate = to;
+        occ.createdAt = now;
+        occ.updatedAt = now;
+        occupancies.save(occ);
+
+        return saved;
     }
 
     /** 育苗中 -> 待出圃 -> 已出圃；育苗中/待出圃 都可以报废。 */

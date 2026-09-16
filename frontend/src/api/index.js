@@ -36,6 +36,15 @@ export const batchApi = {
     http.post(`/batches/${id}/advance`, null, { params: { action, actualQty } })
 }
 
+export const transferApi = {
+  list: (params) => http.get('/transfers', { params }),
+  post: (data) => http.post('/transfers', data)
+}
+
+export const occupancyApi = {
+  list: (params) => http.get('/occupancies', { params })
+}
+
 export const shipmentApi = {
   list: (params) => http.get('/shipments', { params }),
   open: (data) => http.post('/shipments', data),
