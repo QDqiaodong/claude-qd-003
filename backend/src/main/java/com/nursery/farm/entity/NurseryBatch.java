@@ -49,4 +49,12 @@ public class NurseryBatch {
 
     @Column(name = "updated_at", nullable = false)
     public LocalDateTime updatedAt = LocalDateTime.now();
+
+    /**
+     * 开批次时请求方以为这张床归属的温室（不入库）。
+     * 并发换棚时，后到拿到床行锁的开批次请求用它判断：床的归属棚已经变了 →
+     * 明确报「床已经换到别的棚」，而不是泛泛地失败。
+     */
+    @Transient
+    public Long expectedGreenhouseId;
 }

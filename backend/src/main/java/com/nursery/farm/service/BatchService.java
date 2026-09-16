@@ -77,15 +77,35 @@ public class BatchService {
             throw new BizException("预计出圃日期不能早于播种日期");
         }
 
+        // 先锁床行（和换棚、转棚调拨同一把锁、同一个顺序）。床现在是在用还是维修、归属哪个棚，
+        // 一律等拿到锁之后读锁定行再判，不能拿锁前读到的旧快照做判断——否则并发换棚/改维修
+        // 那笔先提交，这笔仍会拿着旧状态把新批次开上去。
+        // 注意：品种等普通读也放在锁后，避免事务的一致性读视图在拿锁前就建立、
+        // 之后看不到并发那笔已提交的占用段。
+        List<Seedbed> lockedBeds = seedbeds.lockByIds(List.of(input.seedbedId));
+        Seedbed bed = lockedBeds.isEmpty() ? null : lockedBeds.get(0);
+        if (bed == null) {
+            throw new BizException("苗床不存在");
+        }
+
         Variety variety = varieties.findById(input.varietyId)
                 .orElseThrow(() -> new BizException("品种不存在"));
         if (!"在售".equals(variety.status)) {
             throw new BizException("品种 " + variety.name + " 已经停用，不能再开新批次");
         }
-        Seedbed bed = seedbeds.findById(input.seedbedId)
-                .orElseThrow(() -> new BizException("苗床不存在"));
+
         if (!"在用".equals(bed.status)) {
             throw new BizException("苗床 " + bed.name + " 现在是" + bed.status + "，不能育新苗");
+        }
+        // 后到者说清原因：请求方开批次时床还在旧棚，拿到锁才发现归属已经被换棚那笔改走了
+        if (input.expectedGreenhouseId != null
+                && !input.expectedGreenhouseId.equals(bed.greenhouseId)) {
+            String nowHouse = bed.greenhouseId == null
+                    ? "未归棚"
+                    : greenhouses.findById(bed.greenhouseId)
+                            .map(h -> h.name + "（" + h.code + "）").orElse("别的温室");
+            throw new BizException("苗床 " + bed.name + " 已经换到 " + nowHouse
+                    + " 了，不再在你选的那座棚里，请按新归属重新选床");
         }
         if (bed.greenhouseId == null) {
             throw new BizException("苗床 " + bed.name + " 还没归到温室，先安排温室");
@@ -102,9 +122,8 @@ public class BatchService {
 
         LocalDate from = input.sowDate;
         LocalDate to = input.expectOutDate;
-        // 先锁床行（和转棚调拨同一把锁、同一个顺序），再读占用段做撞期校验，并发也不会撞
-        seedbeds.lockByIds(List.of(bed.id));
-        for (BedOccupancy seg : occupancies.findBySeedbedIdOrderByFromDateAsc(bed.id)) {
+        // 床行已锁，占用段再走锁定读：拿到最新已落账的占用段做撞期校验，并发也不会撞
+        for (BedOccupancy seg : occupancies.lockBySeedbedOrderByFromDateAsc(bed.id)) {
             NurseryBatch other = batches.findById(seg.batchId).orElse(null);
             if (other != null && SETTLED.contains(other.status)) {
                 continue;

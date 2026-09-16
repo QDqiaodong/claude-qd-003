@@ -117,7 +117,7 @@
             <el-option
               v-for="b in usableBeds"
               :key="b.id"
-              :label="`${b.name}（${b.code} · 可放 ${b.capacity} 株）`"
+              :label="`${b.name}（${b.code} · ${houseName(b.greenhouseId)} · 可放 ${b.capacity} 株）`"
               :value="b.id"
             />
           </el-select>
@@ -157,12 +157,13 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { batchApi, seedbedApi, varietyApi } from '../api'
+import { batchApi, greenhouseApi, seedbedApi, varietyApi } from '../api'
 
 const router = useRouter()
 
 const statuses = ['育苗中', '待出圃', '已出圃', '已报废']
 
+const houses = ref([])
 const varieties = ref([])
 const beds = ref([])
 const batches = ref([])
@@ -184,6 +185,9 @@ const usableBeds = computed(() => beds.value.filter((b) => b.status === '在用'
 
 const varietyName = (id) => (id ? varieties.value.find((v) => v.id === id)?.name || `#${id}` : '未选')
 const bedName = (id) => (id ? beds.value.find((b) => b.id === id)?.name || `#${id}` : '未安排')
+const houseName = (id) => (id ? houses.value.find((h) => h.id === id)?.name || '未归棚' : '未归棚')
+// 开批次那一刻床归属的棚，并发换棚时后端用它说清是「床已经换到别的棚」
+const expectedHouseOfBed = (bedId) => beds.value.find((b) => b.id === bedId)?.greenhouseId ?? null
 const tagType = (s) =>
   s === '已出圃' ? 'success' : s === '待出圃' ? 'warning' : s === '已报废' ? 'info' : ''
 
@@ -243,12 +247,20 @@ const openBatch = () => {
 
 const submitBatch = async () => {
   try {
-    await batchApi.open({ ...batchForm, expectOutDate: batchForm.expectOutDate || null })
+    await batchApi.open({
+      ...batchForm,
+      expectOutDate: batchForm.expectOutDate || null,
+      expectedGreenhouseId: expectedHouseOfBed(batchForm.seedbedId)
+    })
     ElMessage.success('这批苗已经排上苗床')
     batchVisible.value = false
     await loadBatches()
   } catch (e) {
     ElMessage.error(e.message)
+    // 可能被并发换棚/改维修抢先了，刷新床和棚的台账，让选项不再是旧归属
+    const [h, b] = await Promise.all([greenhouseApi.list(), seedbedApi.list({})])
+    houses.value = h
+    beds.value = b
   }
 }
 
@@ -294,9 +306,12 @@ const goTransfer = (row) => {
 
 onMounted(async () => {
   try {
-    const [v, b] = await Promise.all([varietyApi.list(), seedbedApi.list({})])
+    const [v, b, h] = await Promise.all([
+      varietyApi.list(), seedbedApi.list({}), greenhouseApi.list()
+    ])
     varieties.value = v
     beds.value = b
+    houses.value = h
   } catch (e) {
     ElMessage.error(e.message)
   }
